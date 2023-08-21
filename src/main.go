@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/parser"
@@ -36,18 +37,19 @@ import (
 )
 
 var (
-	host             string
-	port             string
-	user             string
-	passwd           string
-	logLevel         string
-	record           bool
-	params           string
-	all              bool
-	reserveSchema    bool
-	xmlPath          string
-	retryConnCount   int
-	collationDisable bool
+	host              string
+	port              string
+	user              string
+	passwd            string
+	logLevel          string
+	record            bool
+	params            string
+	all               bool
+	reserveSchema     bool
+	xmlPath           string
+	retryConnCount    int
+	collationDisable  bool
+	maxConcurrencyNum int
 )
 
 func init() {
@@ -63,6 +65,7 @@ func init() {
 	flag.StringVar(&xmlPath, "xunitfile", "", "The xml file path to record testing results.")
 	flag.IntVar(&retryConnCount, "retry-connection-count", 120, "The max number to retry to connect to the database.")
 	flag.BoolVar(&collationDisable, "collation-disable", false, "run collation related-test with new-collation disabled")
+	flag.IntVar(&maxConcurrencyNum, "max-concurrency-num", 1, "max concurrency num for execute test cases")
 
 	c := &charset.Charset{
 		Name:             "gbk",
@@ -966,15 +969,12 @@ func loadAllTests() ([]string, error) {
 // convertTestsToTestTasks convert all test cases into several testBatches.
 // If we have 11 cases and batchSize is 5, then we will have 4 testBatches.
 func convertTestsToTestTasks(tests []string) (tTasks []testBatch, have_show, have_is bool) {
-	batchSize := 30
-	total := (len(tests) / batchSize) + 2
-	// the extra 1 is for sub_query_more test
-	tTasks = make([]testBatch, total+1)
-	testIdx := 0
-	have_subqmore, have_role := false, false
-	for i := 0; i < total; i++ {
-		tTasks[i] = make(testBatch, 0, batchSize)
-		for j := 0; j <= batchSize && testIdx < len(tests); j++ {
+	testIdx, batchSize := 0, 1
+	have_subqmore := false
+	role_case := make([]string, 0)
+	for testIdx < len(tests) {
+		batchTests := make(testBatch, 0, batchSize)
+		for i := 0; i <= batchSize && testIdx < len(tests); {
 			// skip sub_query_more test, since it consumes the most time
 			// we better use a separate goroutine to run it
 			// role test has many connection/disconnection operation.
@@ -986,28 +986,33 @@ func convertTestsToTestTasks(tests []string) (tTasks []testBatch, have_show, hav
 				have_show = true
 			case "infoschema":
 				have_is = true
-			case "role":
-				have_role = true
-			case "role2":
-				have_role = true
+			case "role", "role2":
+				role_case = append(role_case, tests[testIdx])
 			default:
-				tTasks[i] = append(tTasks[i], tests[testIdx])
+				i++
+				batchTests = append(batchTests, tests[testIdx])
 			}
 			testIdx++
+		}
+		if len(batchTests) != 0 {
+			tTasks = append(tTasks, batchTests)
 		}
 	}
 
 	if have_subqmore {
-		tTasks[total-1] = testBatch{"sub_query_more"}
+		tTasks = append(tTasks, testBatch{"sub_query_more"})
 	}
 
-	if have_role {
-		tTasks[total] = testBatch{"role", "role2"}
+	if len(role_case) != 0 {
+		tTasks = append(tTasks, role_case)
 	}
+
 	return
 }
 
 var msgs = make(chan testTask)
+var msgsWg sync.WaitGroup
+
 var xmlFile *os.File
 var testSuite XUnitTestSuite
 
@@ -1032,10 +1037,11 @@ func (t testBatch) String() string {
 	return strings.Join([]string(t), ", ")
 }
 
-func executeTests(tasks []testBatch, have_show, have_is bool) {
+func executeTests(tasks []testBatch, have_show bool, have_is bool) {
 	// show and infoschema have to be executed first, since the following
 	// tests will create database using their own name.
 	if have_show {
+		msgsWg.Add(1)
 		show := newTester("show")
 		msgs <- testTask{
 			test: "show",
@@ -1044,6 +1050,7 @@ func executeTests(tasks []testBatch, have_show, have_is bool) {
 	}
 
 	if have_is {
+		msgsWg.Add(1)
 		infoschema := newTester("infoschema")
 		msgs <- testTask{
 			test: "infoschema",
@@ -1052,7 +1059,15 @@ func executeTests(tasks []testBatch, have_show, have_is bool) {
 	}
 
 	for _, t := range tasks {
-		t.Run()
+		msgsWg.Add(len(t))
+	}
+
+	p := gopool.NewPool("executePool", int32(maxConcurrencyNum), gopool.NewConfig())
+	for _, t := range tasks {
+		tmp := t
+		p.Go(func() {
+			tmp.Run()
+		})
 	}
 }
 
@@ -1060,6 +1075,7 @@ func consumeError() []error {
 	var es []error
 	for {
 		if t, more := <-msgs; more {
+			msgsWg.Done()
 			if t.err != nil {
 				e := fmt.Errorf("run test [%s] err: %v", t.test, t.err)
 				log.Errorln(e)
@@ -1139,6 +1155,7 @@ func main() {
 
 	go func() {
 		executeTests(convertTestsToTestTasks(tests))
+		msgsWg.Wait()
 		close(msgs)
 	}()
 

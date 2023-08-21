@@ -1,4 +1,4 @@
-module github.com/pingcap/mysql-tester
+module github.com/defined2014/mysql-tester
 
 go 1.19
 
@@ -11,6 +11,7 @@ require (
 
 require (
 	github.com/benbjohnson/clock v1.3.0 // indirect
+	github.com/bytedance/gopkg v0.0.0-20230728082804-614d0af6619b
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548 // indirect
 	github.com/pingcap/log v1.1.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
