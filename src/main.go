@@ -175,6 +175,9 @@ func setSessionVariable(db *sql.DB) {
 	if _, err := db.Exec("SET @@tidb_enable_clustered_index='int_only'"); err != nil {
 		log.Fatalf("Executing \"SET @@tidb_enable_clustered_index='int_only'\" err[%v]", err)
 	}
+	if _, err := db.Exec("SET @@tidb_stats_load_sync_wait=2000"); err != nil {
+		log.Fatalf("Executing \"SET @@tidb_stats_load_sync_wait=2000\" err[%v]", err)
+	}
 }
 
 // isTiDB returns true if the DB is confirmed to be TiDB
