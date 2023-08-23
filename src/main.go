@@ -175,8 +175,8 @@ func setSessionVariable(db *sql.DB) {
 	if _, err := db.Exec("SET @@tidb_enable_clustered_index='int_only'"); err != nil {
 		log.Fatalf("Executing \"SET @@tidb_enable_clustered_index='int_only'\" err[%v]", err)
 	}
-	if _, err := db.Exec("SET @@tidb_stats_load_sync_wait=2000"); err != nil {
-		log.Fatalf("Executing \"SET @@tidb_stats_load_sync_wait=2000\" err[%v]", err)
+	if _, err := db.Exec("SET @@tidb_stats_load_sync_wait=20000"); err != nil {
+		log.Fatalf("Executing \"SET @@tidb_stats_load_sync_wait=20000\" err[%v]", err)
 	}
 }
 
@@ -971,7 +971,7 @@ func loadAllTests() ([]string, error) {
 
 // convertTestsToTestTasks convert all test cases into several testBatches.
 // If we have 11 cases and batchSize is 5, then we will have 4 testBatches.
-func convertTestsToTestTasks(tests []string) (tTasks []testBatch, have_show, have_is bool) {
+func convertTestsToTestTasks(tests []string) (tTasks []testBatch, have_show, have_is, have_blacklist bool) {
 	testIdx, batchSize := 0, 1
 	have_subqmore := false
 	role_case := make([]string, 0)
@@ -987,6 +987,8 @@ func convertTestsToTestTasks(tests []string) (tTasks []testBatch, have_show, hav
 				have_subqmore = true
 			case "show":
 				have_show = true
+			case "black_list":
+				have_blacklist = true
 			case "infoschema":
 				have_is = true
 			case "role", "role2":
@@ -1040,7 +1042,7 @@ func (t testBatch) String() string {
 	return strings.Join([]string(t), ", ")
 }
 
-func executeTests(tasks []testBatch, have_show bool, have_is bool) {
+func executeTests(tasks []testBatch, have_show bool, have_is bool, have_blacklist bool) {
 	// show and infoschema have to be executed first, since the following
 	// tests will create database using their own name.
 	if have_show {
@@ -1058,6 +1060,15 @@ func executeTests(tasks []testBatch, have_show bool, have_is bool) {
 		msgs <- testTask{
 			test: "infoschema",
 			err:  infoschema.Run(),
+		}
+	}
+
+	if have_blacklist {
+		msgsWg.Add(1)
+		blacklist := newTester("black_list")
+		msgs <- testTask{
+			test: "black_list",
+			err:  blacklist.Run(),
 		}
 	}
 
