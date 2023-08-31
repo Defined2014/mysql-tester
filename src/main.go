@@ -253,7 +253,7 @@ func (t *tester) preProcess() {
 	log.Warn("Create new db", mdb)
 
 	dbName = t.name
-	dbName = strings.ReplaceAll(dbName, "/", "_")
+	dbName = strings.ReplaceAll(dbName, "/", "__")
 	if _, err = mdb.Exec(fmt.Sprintf("create database `%s`", dbName)); err != nil {
 		log.Fatalf("Executing create db %s err[%v]", dbName, err)
 	}
@@ -278,7 +278,7 @@ func (t *tester) preProcess() {
 func (t *tester) postProcess() {
 	if !reserveSchema {
 		dbName := t.name
-		dbName = strings.ReplaceAll(dbName, "/", "_")
+		dbName = strings.ReplaceAll(dbName, "/", "__")
 		t.mdb.Exec(fmt.Sprintf("drop database `%s`", dbName))
 	}
 	for _, v := range t.conn {
